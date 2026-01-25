@@ -2,17 +2,32 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+}
+
+html {
+    /* Prevent iOS bounce scroll */
+    overflow: hidden;
+    height: 100%;
 }
 
 body {
     background: #1a1a2e;
     min-height: 100vh;
+    min-height: -webkit-fill-available;
     display: flex;
     justify-content: center;
     align-items: center;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     color: #fff;
-    overflow-x: hidden;
+    overflow: hidden;
+    /* Prevent text selection during gameplay */
+    -webkit-user-select: none;
+    user-select: none;
+    /* Safe area insets for notched devices */
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    /* Prevent pull-to-refresh */
+    overscroll-behavior: none;
 }
 
 .hidden {
@@ -92,6 +107,9 @@ body {
     cursor: pointer;
     transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
     min-width: 100px;
+    /* iOS touch improvements */
+    touch-action: manipulation;
+    -webkit-touch-callout: none;
 }
 
 .btn:hover:not(:disabled) {
@@ -349,6 +367,8 @@ body {
     width: 360px;
     height: 360px;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    /* Prevent touch scrolling on board */
+    touch-action: none;
 }
 
 .cell {
