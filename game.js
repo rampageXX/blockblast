@@ -76,6 +76,40 @@ let soundEnabled = true;
 let audioContext = null;
 let userInteracted = false;
 
+// Timer
+let timerInterval = null;
+let timerSeconds = 0;
+let isPaused = false;
+
+// Obstacle Mode
+let obstacleModeEnabled = false;
+const OBSTACLE_VALUE = -1; // Special value for obstacles
+
+// Music
+let musicEnabled = true;
+let musicVolume = 0.5;
+let musicTracks = [];
+let currentTrackIndex = 0;
+let audioElement = null;
+let isMusicPlaying = false;
+
+// Shop
+let shopItems = [];
+const SHOP_REFRESH_COST = 10;
+const BLOCK_BASE_COST = 15; // Base cost for buying a block
+
+// Leaderboard (stored in localStorage)
+const LEADERBOARD_KEY = 'blastdrop_leaderboard';
+
+// Character images for row clears
+const CHARACTER_IMAGES = {
+    5: 'pictures/Mega Charizard X.png',
+    4: 'pictures/Mega Charizard Y.png',
+    3: 'pictures/Pikachu.png',
+    2: 'pictures/Pidgeotto.png',
+    1: 'pictures/Raticate.png'
+};
+
 // ==================== DOM ELEMENTS ====================
 
 // Start screen
@@ -84,6 +118,8 @@ const playerNameInput = document.getElementById('player-name-input');
 const addPlayerBtn = document.getElementById('add-player-btn');
 const playerListEl = document.getElementById('player-list');
 const startGameBtn = document.getElementById('start-game-btn');
+const obstacleModeToggle = document.getElementById('obstacle-mode-toggle');
+const leaderboardBtn = document.getElementById('leaderboard-btn');
 
 // Game screen
 const gameScreen = document.getElementById('game-screen');
@@ -95,8 +131,21 @@ const scoreboardEl = document.getElementById('scoreboard');
 const soundToggle = document.getElementById('sound-toggle');
 const undoBtn = document.getElementById('undo-btn');
 
-// Pikachu
-const pikachuContainer = document.getElementById('pikachu-container');
+// Timer
+const timerDisplay = document.getElementById('timer-display');
+
+// Header buttons
+const shopBtn = document.getElementById('shop-btn');
+const pauseBtn = document.getElementById('pause-btn');
+const settingsBtn = document.getElementById('settings-btn');
+const musicToggle = document.getElementById('music-toggle');
+
+// Character container (replaces Pikachu)
+const characterContainer = document.getElementById('character-container');
+const characterImage = document.getElementById('character-image');
+
+// Board clear celebration
+const boardClearCelebration = document.getElementById('board-clear-celebration');
 
 // Turn over overlay
 const turnOverOverlay = document.getElementById('turn-over-overlay');
@@ -108,6 +157,31 @@ const nextPlayerBtn = document.getElementById('next-player-btn');
 const gameCompleteOverlay = document.getElementById('game-complete-overlay');
 const finalRankingsEl = document.getElementById('final-rankings');
 const playAgainBtn = document.getElementById('play-again-btn');
+
+// Pause overlay
+const pauseOverlay = document.getElementById('pause-overlay');
+const resumeBtn = document.getElementById('resume-btn');
+
+// Shop overlay
+const shopOverlay = document.getElementById('shop-overlay');
+const shopPointsDisplay = document.getElementById('shop-points-display');
+const shopItemsEl = document.getElementById('shop-items');
+const refreshShopBtn = document.getElementById('refresh-shop-btn');
+const closeShopBtn = document.getElementById('close-shop-btn');
+const shopMessage = document.getElementById('shop-message');
+
+// Settings overlay
+const settingsOverlay = document.getElementById('settings-overlay');
+const settingsSoundToggle = document.getElementById('settings-sound-toggle');
+const settingsMusicToggle = document.getElementById('settings-music-toggle');
+const musicVolumeSlider = document.getElementById('music-volume-slider');
+const volumeDisplay = document.getElementById('volume-display');
+const closeSettingsBtn = document.getElementById('close-settings-btn');
+
+// Leaderboard overlay
+const leaderboardOverlay = document.getElementById('leaderboard-overlay');
+const leaderboardList = document.getElementById('leaderboard-list');
+const closeLeaderboardBtn = document.getElementById('close-leaderboard-btn');
 
 // Ghost preview
 const ghostPreview = document.getElementById('ghost-preview');
@@ -218,21 +292,526 @@ function loadSoundPreference() {
     }
 }
 
-// ==================== PIKACHU ANIMATION ====================
+// ==================== TIMER SYSTEM ====================
 
-function showPikachu() {
-    pikachuContainer.classList.remove('hidden');
+function startTimer() {
+    timerSeconds = 0;
+    updateTimerDisplay();
+    timerInterval = setInterval(() => {
+        if (!isPaused && !shopOpen) {
+            timerSeconds++;
+            updateTimerDisplay();
+        }
+    }, 1000);
+}
 
-    // Remove and re-add to restart animation
-    const pikachu = pikachuContainer.querySelector('.pikachu');
-    pikachu.style.animation = 'none';
-    pikachu.offsetHeight; // Trigger reflow
-    pikachu.style.animation = 'pikachuJump 1s ease-out forwards';
+function stopTimer() {
+    if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+}
+
+function pauseTimer() {
+    isPaused = true;
+}
+
+function resumeTimer() {
+    isPaused = false;
+}
+
+function updateTimerDisplay() {
+    const minutes = Math.floor(timerSeconds / 60);
+    const seconds = timerSeconds % 60;
+    timerDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
+// ==================== PAUSE SYSTEM ====================
+
+function pauseGame() {
+    if (!gameStarted || isPaused) return;
+
+    isPaused = true;
+    pauseTimer();
+    pauseMusic();
+    pauseOverlay.classList.remove('hidden');
+}
+
+function resumeGame() {
+    if (!isPaused) return;
+
+    isPaused = false;
+    resumeTimer();
+    if (musicEnabled) {
+        resumeMusic();
+    }
+    pauseOverlay.classList.add('hidden');
+}
+
+// ==================== MUSIC SYSTEM ====================
+
+async function loadMusicTracks() {
+    // List of known tracks in the music folder (with track numbers)
+    const trackFiles = [
+        '1-01. Opening.mp3',
+        '1-02. Theme Of Pallet Town.mp3',
+        '1-03. Professor Oak.mp3',
+        '1-04. Oak\'s Laboratory.mp3',
+        '1-05. Rival Appears.mp3',
+        '1-06. Road to Viridian City – From Pallet.mp3',
+        '1-07. Battle (VS Wild Pokémon).mp3',
+        '1-08. Victory (VS Wild Pokémon).mp3',
+        '1-09. Theme Of Pewter City.mp3',
+        '1-10. Pokémon Center.mp3',
+        '1-17. Mt. Moon.mp3',
+        '1-23. Theme Of Vermillion City.mp3'
+    ];
+
+    musicTracks = trackFiles.map(file => `music/${file}`);
+
+    // Shuffle tracks for variety
+    shuffleArray(musicTracks);
+}
+
+function shuffleArray(array) {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+}
+
+function initMusicPlayer() {
+    if (audioElement) return;
+
+    audioElement = new Audio();
+    audioElement.volume = musicVolume;
+
+    audioElement.addEventListener('ended', () => {
+        playNextTrack();
+    });
+
+    audioElement.addEventListener('error', (e) => {
+        console.log('Error loading track, skipping...');
+        playNextTrack();
+    });
+}
+
+function startMusic() {
+    if (!musicEnabled || musicTracks.length === 0) return;
+
+    initMusicPlayer();
+    currentTrackIndex = 0;
+    playCurrentTrack();
+}
+
+let musicRetryCount = 0;
+const MAX_MUSIC_RETRIES = 3;
+
+function playCurrentTrack() {
+    if (!audioElement || musicTracks.length === 0) return;
+
+    audioElement.src = musicTracks[currentTrackIndex];
+    audioElement.volume = musicVolume;
+
+    audioElement.play().then(() => {
+        isMusicPlaying = true;
+        musicRetryCount = 0; // Reset on success
+    }).catch(e => {
+        console.log('Could not play music:', e);
+        musicRetryCount++;
+        if (musicRetryCount < MAX_MUSIC_RETRIES) {
+            // Try next track
+            playNextTrack();
+        } else {
+            console.log('Max music retries reached, stopping music attempts');
+            musicRetryCount = 0;
+        }
+    });
+}
+
+function playNextTrack() {
+    currentTrackIndex = (currentTrackIndex + 1) % musicTracks.length;
+    playCurrentTrack();
+}
+
+function pauseMusic() {
+    if (audioElement && isMusicPlaying) {
+        audioElement.pause();
+    }
+}
+
+function resumeMusic() {
+    if (audioElement && musicEnabled) {
+        audioElement.play().catch(e => console.log('Could not resume music'));
+    }
+}
+
+function stopMusic() {
+    if (audioElement) {
+        // Fade out
+        const fadeInterval = setInterval(() => {
+            if (audioElement.volume > 0.05) {
+                audioElement.volume = Math.max(0, audioElement.volume - 0.05);
+            } else {
+                clearInterval(fadeInterval);
+                audioElement.pause();
+                audioElement.volume = musicVolume;
+                isMusicPlaying = false;
+            }
+        }, 50);
+    }
+}
+
+function toggleMusic() {
+    musicEnabled = !musicEnabled;
+    const musicOn = musicToggle.querySelector('.music-on');
+    const musicOff = musicToggle.querySelector('.music-off');
+
+    if (musicEnabled) {
+        musicOn.classList.remove('hidden');
+        musicOff.classList.add('hidden');
+        if (gameStarted && !isPaused) {
+            resumeMusic();
+        }
+    } else {
+        musicOn.classList.add('hidden');
+        musicOff.classList.remove('hidden');
+        pauseMusic();
+    }
+
+    saveMusicPreferences();
+}
+
+function setMusicVolume(volume) {
+    musicVolume = volume / 100;
+    if (audioElement) {
+        audioElement.volume = musicVolume;
+    }
+    volumeDisplay.textContent = `${volume}%`;
+    saveMusicPreferences();
+}
+
+function saveMusicPreferences() {
+    localStorage.setItem('blastdrop_music', musicEnabled ? 'on' : 'off');
+    localStorage.setItem('blastdrop_music_volume', (musicVolume * 100).toString());
+}
+
+function loadMusicPreferences() {
+    const savedMusic = localStorage.getItem('blastdrop_music');
+    const savedVolume = localStorage.getItem('blastdrop_music_volume');
+
+    if (savedMusic === 'off') {
+        musicEnabled = false;
+        if (musicToggle) {
+            musicToggle.querySelector('.music-on').classList.add('hidden');
+            musicToggle.querySelector('.music-off').classList.remove('hidden');
+        }
+        if (settingsMusicToggle) {
+            settingsMusicToggle.checked = false;
+        }
+    }
+
+    if (savedVolume) {
+        musicVolume = parseInt(savedVolume) / 100;
+        if (musicVolumeSlider) {
+            musicVolumeSlider.value = savedVolume;
+        }
+        if (volumeDisplay) {
+            volumeDisplay.textContent = `${savedVolume}%`;
+        }
+    }
+}
+
+// ==================== LEADERBOARD SYSTEM ====================
+
+function loadLeaderboard() {
+    const saved = localStorage.getItem(LEADERBOARD_KEY);
+    if (saved) {
+        return JSON.parse(saved);
+    }
+    return {};
+}
+
+function saveLeaderboard(leaderboard) {
+    localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(leaderboard));
+}
+
+function updateLeaderboard(playerName, score) {
+    const leaderboard = loadLeaderboard();
+
+    // Only store highest score per player
+    if (!leaderboard[playerName] || leaderboard[playerName] < score) {
+        leaderboard[playerName] = score;
+        saveLeaderboard(leaderboard);
+    }
+}
+
+function renderLeaderboard() {
+    const leaderboard = loadLeaderboard();
+    const entries = Object.entries(leaderboard)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20); // Top 20
+
+    leaderboardList.innerHTML = '';
+
+    if (entries.length === 0) {
+        leaderboardList.innerHTML = '<div class="leaderboard-empty">No scores yet. Play a game to get on the leaderboard!</div>';
+        return;
+    }
+
+    entries.forEach(([name, score], index) => {
+        const entry = document.createElement('div');
+        entry.className = `leaderboard-entry${index < 3 ? ` rank-${index + 1}` : ''}`;
+        entry.innerHTML = `
+            <span class="leaderboard-rank">${index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : (index + 1)}</span>
+            <span class="leaderboard-name">${escapeHtml(name)}</span>
+            <span class="leaderboard-score">${score}</span>
+        `;
+        leaderboardList.appendChild(entry);
+    });
+}
+
+function showLeaderboard() {
+    renderLeaderboard();
+    leaderboardOverlay.classList.remove('hidden');
+}
+
+function hideLeaderboard() {
+    leaderboardOverlay.classList.add('hidden');
+}
+
+// ==================== CHARACTER ANIMATION ====================
+
+function showCharacter(linesCleared) {
+    // Determine which character to show based on lines cleared
+    const clampedLines = Math.min(5, Math.max(1, linesCleared));
+    const imagePath = CHARACTER_IMAGES[clampedLines];
+
+    if (!imagePath) return;
+
+    characterImage.src = imagePath;
+    characterContainer.classList.remove('hidden');
+
+    // Reset animation
+    characterImage.style.animation = 'none';
+    characterImage.offsetHeight; // Trigger reflow
+    characterImage.style.animation = 'characterPop 1.2s ease-out forwards';
 
     // Hide after animation
     setTimeout(() => {
-        pikachuContainer.classList.add('hidden');
-    }, 1000);
+        characterContainer.classList.add('hidden');
+    }, 1200);
+}
+
+// ==================== BOARD CLEAR CELEBRATION ====================
+
+function showBoardClearCelebration() {
+    boardClearCelebration.classList.remove('hidden');
+
+    // Reset animation
+    boardClearCelebration.style.animation = 'none';
+    boardClearCelebration.offsetHeight;
+    boardClearCelebration.style.animation = 'celebrationFlash 1.5s ease-out forwards';
+
+    // Hide after animation
+    setTimeout(() => {
+        boardClearCelebration.classList.add('hidden');
+    }, 1500);
+}
+
+function isBoardEmpty() {
+    for (let row = 0; row < BOARD_SIZE; row++) {
+        for (let col = 0; col < BOARD_SIZE; col++) {
+            const value = board[row][col];
+            // Check if cell is filled (not empty, not obstacle)
+            if (value > 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// ==================== OBSTACLE SYSTEM ====================
+
+function generateObstacles() {
+    if (!obstacleModeEnabled) return;
+
+    // Generate 6-10 random obstacle positions
+    const obstacleCount = 6 + Math.floor(Math.random() * 5);
+    const positions = new Set();
+
+    while (positions.size < obstacleCount) {
+        const row = Math.floor(Math.random() * BOARD_SIZE);
+        const col = Math.floor(Math.random() * BOARD_SIZE);
+        positions.add(`${row}-${col}`);
+    }
+
+    positions.forEach(pos => {
+        const [row, col] = pos.split('-').map(Number);
+        board[row][col] = OBSTACLE_VALUE;
+    });
+}
+
+// ==================== SHOP SYSTEM ====================
+
+function generateShopItems() {
+    shopItems = [];
+
+    for (let i = 0; i < 3; i++) {
+        const piece = getRandomPiece();
+        // Cost based on piece complexity (cells count)
+        const cellCount = piece.shape.flat().filter(c => c === 1).length;
+        const cost = BLOCK_BASE_COST + (cellCount - 1) * 5;
+
+        shopItems.push({
+            piece: piece,
+            cost: cost
+        });
+    }
+}
+
+function renderShopItems() {
+    shopPointsDisplay.textContent = score;
+    shopItemsEl.innerHTML = '';
+
+    shopItems.forEach((item, index) => {
+        const canAfford = score >= item.cost;
+        const hasSpace = currentPieces.some(p => p === null);
+
+        const itemEl = document.createElement('div');
+        itemEl.className = `shop-item${!canAfford ? ' disabled' : ''}`;
+
+        // Create piece preview
+        const previewEl = document.createElement('div');
+        previewEl.className = 'shop-item-preview';
+        const rows = item.piece.shape.length;
+        const cols = item.piece.shape[0].length;
+        previewEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+        previewEl.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                const cell = document.createElement('div');
+                cell.className = 'piece-cell';
+                if (item.piece.shape[r][c] === 1) {
+                    cell.classList.add(`color-${item.piece.color}`);
+                } else {
+                    cell.classList.add('empty');
+                }
+                previewEl.appendChild(cell);
+            }
+        }
+
+        const costEl = document.createElement('div');
+        costEl.className = 'shop-item-cost';
+        costEl.textContent = `${item.cost} pts`;
+
+        const buyBtn = document.createElement('button');
+        buyBtn.className = 'shop-item-buy';
+        buyBtn.textContent = 'Buy';
+        buyBtn.disabled = !canAfford || !hasSpace;
+        buyBtn.addEventListener('click', () => buyShopItem(index));
+
+        itemEl.appendChild(previewEl);
+        itemEl.appendChild(costEl);
+        itemEl.appendChild(buyBtn);
+        shopItemsEl.appendChild(itemEl);
+    });
+
+    // Update refresh button
+    refreshShopBtn.disabled = score < SHOP_REFRESH_COST;
+    refreshShopBtn.textContent = `🔄 Refresh (${SHOP_REFRESH_COST} pts)`;
+}
+
+function buyShopItem(index) {
+    const item = shopItems[index];
+
+    if (score < item.cost) {
+        showShopMessage('Not enough points!', 'error');
+        return;
+    }
+
+    // Find empty slot in hand
+    const emptySlot = currentPieces.findIndex(p => p === null);
+    if (emptySlot === -1) {
+        showShopMessage('No space to add block!', 'error');
+        return;
+    }
+
+    // Deduct cost
+    score -= item.cost;
+    updateScoreDisplay();
+
+    // Add piece to hand
+    currentPieces[emptySlot] = {
+        shape: item.piece.shape.map(row => [...row]),
+        color: item.piece.color
+    };
+
+    renderPieces();
+    showShopMessage('Purchased!', 'success');
+
+    // Refresh shop display
+    renderShopItems();
+
+    // Close shop after short delay
+    setTimeout(() => {
+        hideShop();
+    }, 500);
+}
+
+function refreshShop() {
+    if (score < SHOP_REFRESH_COST) {
+        showShopMessage('Not enough points to refresh!', 'error');
+        return;
+    }
+
+    score -= SHOP_REFRESH_COST;
+    updateScoreDisplay();
+    generateShopItems();
+    renderShopItems();
+    showShopMessage('Shop refreshed!', 'success');
+}
+
+function showShopMessage(text, type) {
+    shopMessage.textContent = text;
+    shopMessage.className = `shop-message ${type}`;
+    shopMessage.classList.remove('hidden');
+
+    setTimeout(() => {
+        shopMessage.classList.add('hidden');
+    }, 1500);
+}
+
+let shopOpen = false;
+
+function openShop() {
+    if (!gameStarted || isPaused) return;
+
+    shopOpen = true;
+    generateShopItems();
+    renderShopItems();
+    shopOverlay.classList.remove('hidden');
+}
+
+function hideShop() {
+    shopOverlay.classList.add('hidden');
+    shopOpen = false;
+}
+
+// ==================== SETTINGS ====================
+
+function openSettings() {
+    settingsSoundToggle.checked = soundEnabled;
+    settingsMusicToggle.checked = musicEnabled;
+    musicVolumeSlider.value = musicVolume * 100;
+    volumeDisplay.textContent = `${Math.round(musicVolume * 100)}%`;
+    settingsOverlay.classList.remove('hidden');
+}
+
+function closeSettings() {
+    settingsOverlay.classList.add('hidden');
 }
 
 // ==================== UNDO SYSTEM ====================
@@ -379,6 +958,7 @@ function startGame() {
 
     gameStarted = true;
     currentPlayerIndex = 0;
+    obstacleModeEnabled = obstacleModeToggle ? obstacleModeToggle.checked : false;
 
     players.forEach(p => {
         p.score = 0;
@@ -388,6 +968,10 @@ function startGame() {
     startScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
 
+    // Load music tracks and start playing
+    loadMusicTracks();
+    startMusic();
+
     startPlayerTurn();
 }
 
@@ -395,14 +979,21 @@ function startPlayerTurn() {
     const player = players[currentPlayerIndex];
 
     initBoard();
+    generateObstacles(); // Add obstacles if mode is enabled
     score = 0;
     combo = 0;
     currentPieces = [null, null, null];
     clearUndoState();
+    isPaused = false;
+    shopOpen = false;
 
     currentPlayerNameEl.textContent = player.name;
     updateScoreDisplay();
     renderScoreboard();
+
+    // Start timer for this player's turn
+    stopTimer();
+    startTimer();
 
     refillPieces();
     renderBoard();
@@ -410,6 +1001,8 @@ function startPlayerTurn() {
 
     turnOverOverlay.classList.add('hidden');
     gameCompleteOverlay.classList.add('hidden');
+    pauseOverlay.classList.add('hidden');
+    shopOverlay.classList.add('hidden');
 }
 
 function endPlayerTurn() {
@@ -417,7 +1010,13 @@ function endPlayerTurn() {
     player.score = score;
     player.finished = true;
 
+    // Stop timer
+    stopTimer();
+
     clearUndoState(); // Can't undo after turn ends
+
+    // Update leaderboard with this player's score
+    updateLeaderboard(player.name, score);
 
     playSound('gameOver');
 
@@ -428,6 +1027,7 @@ function endPlayerTurn() {
 
     if (allDone) {
         showGameComplete();
+        stopMusic(); // Fade out music at end of game
     } else {
         turnOverOverlay.classList.remove('hidden');
     }
@@ -465,6 +1065,12 @@ function resetToStartScreen() {
     gameStarted = false;
     players = [];
     currentPlayerIndex = 0;
+    isPaused = false;
+    shopOpen = false;
+
+    // Stop timer and music
+    stopTimer();
+    stopMusic();
 
     playerListEl.innerHTML = '';
     updateStartButton();
@@ -472,6 +1078,9 @@ function resetToStartScreen() {
     gameScreen.classList.add('hidden');
     turnOverOverlay.classList.add('hidden');
     gameCompleteOverlay.classList.add('hidden');
+    pauseOverlay.classList.add('hidden');
+    shopOverlay.classList.add('hidden');
+    settingsOverlay.classList.add('hidden');
     startScreen.classList.remove('hidden');
 }
 
@@ -486,7 +1095,9 @@ function renderBoard() {
 
         cell.className = 'cell';
 
-        if (value > 0) {
+        if (value === OBSTACLE_VALUE) {
+            cell.classList.add('obstacle');
+        } else if (value > 0) {
             cell.classList.add('filled', `color-${value}`);
         }
     });
@@ -608,6 +1219,7 @@ function canPlace(piece, startRow, startCol) {
                     return false;
                 }
 
+                // Check for obstacles (OBSTACLE_VALUE) or filled cells (> 0)
                 if (board[boardRow][boardCol] !== 0) {
                     return false;
                 }
@@ -721,9 +1333,9 @@ function placePiece(pieceIndex, startRow, startCol, useSnap = true) {
 
     calculateScore(cellsPlaced, linesCleared);
 
-    // Show Pikachu if lines were cleared
+    // Show character animation based on lines cleared
     if (linesCleared > 0) {
-        showPikachu();
+        showCharacter(linesCleared);
     }
 
     if (currentPieces.every(p => p === null)) {
@@ -746,20 +1358,37 @@ function checkAndClearLines() {
     const rowsToClear = [];
     const colsToClear = [];
 
+    // Check rows - a row is complete when all non-obstacle cells are filled
     for (let row = 0; row < BOARD_SIZE; row++) {
-        if (board[row].every(cell => cell !== 0)) {
-            rowsToClear.push(row);
-        }
-    }
-
-    for (let col = 0; col < BOARD_SIZE; col++) {
         let complete = true;
-        for (let row = 0; row < BOARD_SIZE; row++) {
-            if (board[row][col] === 0) {
+
+        for (let col = 0; col < BOARD_SIZE; col++) {
+            const value = board[row][col];
+            // Obstacles count as "filled" for line completion
+            // Empty cells (0) mean the row is not complete
+            if (value === 0) {
                 complete = false;
                 break;
             }
         }
+
+        if (complete) {
+            rowsToClear.push(row);
+        }
+    }
+
+    // Check columns
+    for (let col = 0; col < BOARD_SIZE; col++) {
+        let complete = true;
+
+        for (let row = 0; row < BOARD_SIZE; row++) {
+            const value = board[row][col];
+            if (value === 0) {
+                complete = false;
+                break;
+            }
+        }
+
         if (complete) {
             colsToClear.push(col);
         }
@@ -778,13 +1407,19 @@ function checkAndClearLines() {
 
     rowsToClear.forEach(row => {
         for (let col = 0; col < BOARD_SIZE; col++) {
-            cellsToClear.add(`${row}-${col}`);
+            // Don't clear obstacles - they remain permanently
+            if (board[row][col] !== OBSTACLE_VALUE) {
+                cellsToClear.add(`${row}-${col}`);
+            }
         }
     });
 
     colsToClear.forEach(col => {
         for (let row = 0; row < BOARD_SIZE; row++) {
-            cellsToClear.add(`${row}-${col}`);
+            // Don't clear obstacles - they remain permanently
+            if (board[row][col] !== OBSTACLE_VALUE) {
+                cellsToClear.add(`${row}-${col}`);
+            }
         }
     });
 
@@ -802,6 +1437,11 @@ function checkAndClearLines() {
             board[row][col] = 0;
         });
         renderBoard();
+
+        // Check if board is now empty (no colored blocks, only obstacles allowed)
+        if (isBoardEmpty()) {
+            showBoardClearCelebration();
+        }
     }, 400);
 
     return totalLines;
@@ -860,12 +1500,68 @@ function setupEventListeners() {
     });
 
     startGameBtn.addEventListener('click', startGame);
+    leaderboardBtn.addEventListener('click', showLeaderboard);
+    closeLeaderboardBtn.addEventListener('click', hideLeaderboard);
 
     // Game events
     nextPlayerBtn.addEventListener('click', nextPlayer);
     playAgainBtn.addEventListener('click', resetToStartScreen);
     soundToggle.addEventListener('click', toggleSound);
     undoBtn.addEventListener('click', performUndo);
+
+    // Pause events
+    pauseBtn.addEventListener('click', pauseGame);
+    resumeBtn.addEventListener('click', resumeGame);
+
+    // Shop events
+    shopBtn.addEventListener('click', openShop);
+    closeShopBtn.addEventListener('click', hideShop);
+    refreshShopBtn.addEventListener('click', refreshShop);
+
+    // Music events
+    musicToggle.addEventListener('click', toggleMusic);
+
+    // Settings events
+    settingsBtn.addEventListener('click', openSettings);
+    closeSettingsBtn.addEventListener('click', closeSettings);
+
+    settingsSoundToggle.addEventListener('change', (e) => {
+        soundEnabled = e.target.checked;
+        localStorage.setItem('blastdrop_sound', soundEnabled ? 'on' : 'off');
+
+        const soundOn = soundToggle.querySelector('.sound-on');
+        const soundOff = soundToggle.querySelector('.sound-off');
+        if (soundEnabled) {
+            soundOn.classList.remove('hidden');
+            soundOff.classList.add('hidden');
+        } else {
+            soundOn.classList.add('hidden');
+            soundOff.classList.remove('hidden');
+        }
+    });
+
+    settingsMusicToggle.addEventListener('change', (e) => {
+        musicEnabled = e.target.checked;
+        saveMusicPreferences();
+
+        const musicOn = musicToggle.querySelector('.music-on');
+        const musicOff = musicToggle.querySelector('.music-off');
+        if (musicEnabled) {
+            musicOn.classList.remove('hidden');
+            musicOff.classList.add('hidden');
+            if (gameStarted && !isPaused) {
+                resumeMusic();
+            }
+        } else {
+            musicOn.classList.add('hidden');
+            musicOff.classList.remove('hidden');
+            pauseMusic();
+        }
+    });
+
+    musicVolumeSlider.addEventListener('input', (e) => {
+        setMusicVolume(parseInt(e.target.value));
+    });
 
     // Board events
     boardEl.addEventListener('dragover', handleDragOver);
@@ -1144,8 +1840,8 @@ function showGhost(piece, x, y) {
         }
     }
 
-    const ghostWidth = cols * 44;
-    const ghostHeight = rows * 44;
+    const ghostWidth = cols * 52;
+    const ghostHeight = rows * 52;
     ghostPreview.style.left = `${x - ghostWidth / 2}px`;
     ghostPreview.style.top = `${y - ghostHeight / 2}px`;
     ghostPreview.classList.remove('hidden');
@@ -1159,5 +1855,6 @@ function hideGhost() {
 
 document.addEventListener('DOMContentLoaded', () => {
     loadSoundPreference();
+    loadMusicPreferences();
     setupEventListeners();
 });
