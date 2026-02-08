@@ -98,8 +98,13 @@ let shopItems = [];
 const SHOP_REFRESH_COST = 10;
 const BLOCK_BASE_COST = 15; // Base cost for buying a block
 
-// Leaderboard (stored in localStorage)
+// Leaderboard (stored in localStorage + JSONBin.io for global sync)
 const LEADERBOARD_KEY = 'blastdrop_leaderboard';
+
+// JSONBin.io Global Leaderboard
+const JSONBIN_BIN_ID = '69888f4f43b1c97be96eb0d4';
+const JSONBIN_ACCESS_KEY = '$2a$10$Nfgf3kBwUxV0aJ2QbH9dJ.3bDGDAuXkqpxul11ESJUJ8r7Plwxekm';
+const JSONBIN_API_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 
 // Character images for row clears
 const CHARACTER_IMAGES = {
@@ -169,6 +174,12 @@ const shopItemsEl = document.getElementById('shop-items');
 const refreshShopBtn = document.getElementById('refresh-shop-btn');
 const closeShopBtn = document.getElementById('close-shop-btn');
 const shopMessage = document.getElementById('shop-message');
+
+// End game overlay
+const endGameOverlay = document.getElementById('end-game-overlay');
+const endGameBtn = document.getElementById('end-game-btn');
+const confirmEndGameBtn = document.getElementById('confirm-end-game-btn');
+const cancelEndGameBtn = document.getElementById('cancel-end-game-btn');
 
 // Settings overlay
 const settingsOverlay = document.getElementById('settings-overlay');
@@ -470,7 +481,7 @@ function toggleMusic() {
     if (musicEnabled) {
         musicOn.classList.remove('hidden');
         musicOff.classList.add('hidden');
-        if (gameStarted && !isPaused) {
+        if (!isPaused) {
             resumeMusic();
         }
     } else {
@@ -536,23 +547,102 @@ function saveLeaderboard(leaderboard) {
     localStorage.setItem(LEADERBOARD_KEY, JSON.stringify(leaderboard));
 }
 
-function updateLeaderboard(playerName, score) {
-    const leaderboard = loadLeaderboard();
+// ==================== GLOBAL LEADERBOARD (JSONBin.io) ====================
 
-    // Only store highest score per player
-    if (!leaderboard[playerName] || leaderboard[playerName] < score) {
-        leaderboard[playerName] = score;
-        saveLeaderboard(leaderboard);
+async function fetchGlobalLeaderboard() {
+    try {
+        const response = await fetch(`${JSONBIN_API_URL}/latest`, {
+            method: 'GET',
+            headers: {
+                'X-Access-Key': JSONBIN_ACCESS_KEY
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        return data.record || {};
+    } catch (error) {
+        console.log('Failed to fetch global leaderboard:', error);
+        return null;
     }
 }
 
-function renderLeaderboard() {
-    const leaderboard = loadLeaderboard();
+async function saveGlobalLeaderboard(leaderboardData) {
+    try {
+        const response = await fetch(JSONBIN_API_URL, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Access-Key': JSONBIN_ACCESS_KEY
+            },
+            body: JSON.stringify(leaderboardData)
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        return true;
+    } catch (error) {
+        console.log('Failed to save to global leaderboard:', error);
+        return false;
+    }
+}
+
+function mergeLeaderboards(local, global) {
+    const merged = { ...global };
+    for (const [name, score] of Object.entries(local)) {
+        if (!merged[name] || merged[name] < score) {
+            merged[name] = score;
+        }
+    }
+    return merged;
+}
+
+let leaderboardSyncInProgress = false;
+
+async function updateLeaderboard(playerName, playerScore) {
+    // Always update local first (instant, offline-safe)
+    const localLeaderboard = loadLeaderboard();
+    if (!localLeaderboard[playerName] || localLeaderboard[playerName] < playerScore) {
+        localLeaderboard[playerName] = playerScore;
+        saveLeaderboard(localLeaderboard);
+    }
+
+    // Global sync with simple lock
+    if (leaderboardSyncInProgress) return;
+    leaderboardSyncInProgress = true;
+
+    try {
+        const globalData = await fetchGlobalLeaderboard();
+        if (globalData !== null) {
+            const merged = mergeLeaderboards(localLeaderboard, globalData);
+            await saveGlobalLeaderboard(merged);
+            saveLeaderboard(merged);
+        }
+    } catch (error) {
+        console.log('Global leaderboard sync failed:', error);
+    } finally {
+        leaderboardSyncInProgress = false;
+    }
+}
+
+function renderLeaderboardData(leaderboard, isOffline) {
     const entries = Object.entries(leaderboard)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 20); // Top 20
+        .slice(0, 20);
 
     leaderboardList.innerHTML = '';
+
+    if (isOffline) {
+        const offlineNotice = document.createElement('div');
+        offlineNotice.className = 'leaderboard-offline-notice';
+        offlineNotice.textContent = '(Offline - showing local scores only)';
+        leaderboardList.appendChild(offlineNotice);
+    }
 
     if (entries.length === 0) {
         leaderboardList.innerHTML = '<div class="leaderboard-empty">No scores yet. Play a game to get on the leaderboard!</div>';
@@ -571,9 +661,26 @@ function renderLeaderboard() {
     });
 }
 
-function showLeaderboard() {
-    renderLeaderboard();
+async function showLeaderboard() {
+    // Show overlay immediately with loading state
+    leaderboardList.innerHTML = '<div class="leaderboard-empty leaderboard-loading">Loading leaderboard...</div>';
     leaderboardOverlay.classList.remove('hidden');
+
+    // Try to fetch global data
+    const globalData = await fetchGlobalLeaderboard();
+    const localData = loadLeaderboard();
+
+    let displayData;
+    let isOffline = false;
+    if (globalData !== null) {
+        displayData = mergeLeaderboards(localData, globalData);
+        saveLeaderboard(displayData);
+    } else {
+        displayData = localData;
+        isOffline = true;
+    }
+
+    renderLeaderboardData(displayData, isOffline);
 }
 
 function hideLeaderboard() {
@@ -968,10 +1075,6 @@ function startGame() {
     startScreen.classList.add('hidden');
     gameScreen.classList.remove('hidden');
 
-    // Load music tracks and start playing
-    loadMusicTracks();
-    startMusic();
-
     startPlayerTurn();
 }
 
@@ -1003,6 +1106,7 @@ function startPlayerTurn() {
     gameCompleteOverlay.classList.add('hidden');
     pauseOverlay.classList.add('hidden');
     shopOverlay.classList.add('hidden');
+    endGameOverlay.classList.add('hidden');
 }
 
 function endPlayerTurn() {
@@ -1068,9 +1172,8 @@ function resetToStartScreen() {
     isPaused = false;
     shopOpen = false;
 
-    // Stop timer and music
+    // Stop timer (music keeps playing on start screen)
     stopTimer();
-    stopMusic();
 
     playerListEl.innerHTML = '';
     updateStartButton();
@@ -1081,7 +1184,39 @@ function resetToStartScreen() {
     pauseOverlay.classList.add('hidden');
     shopOverlay.classList.add('hidden');
     settingsOverlay.classList.add('hidden');
+    endGameOverlay.classList.add('hidden');
     startScreen.classList.remove('hidden');
+}
+
+// ==================== END GAME ====================
+
+function showEndGameConfirmation() {
+    if (!gameStarted) return;
+    endGameOverlay.classList.remove('hidden');
+}
+
+function hideEndGameConfirmation() {
+    endGameOverlay.classList.add('hidden');
+}
+
+function confirmEndGame() {
+    hideEndGameConfirmation();
+
+    // End all remaining players' turns with their current scores
+    players.forEach(p => {
+        if (!p.finished) {
+            // Save current player's score if they're the active one
+            if (players.indexOf(p) === currentPlayerIndex) {
+                p.score = score;
+            }
+            p.finished = true;
+            updateLeaderboard(p.name, p.score);
+        }
+    });
+
+    stopTimer();
+    showGameComplete();
+    stopMusic();
 }
 
 // ==================== RENDERING ====================
@@ -1513,6 +1648,11 @@ function setupEventListeners() {
     pauseBtn.addEventListener('click', pauseGame);
     resumeBtn.addEventListener('click', resumeGame);
 
+    // End game events
+    endGameBtn.addEventListener('click', showEndGameConfirmation);
+    confirmEndGameBtn.addEventListener('click', confirmEndGame);
+    cancelEndGameBtn.addEventListener('click', hideEndGameConfirmation);
+
     // Shop events
     shopBtn.addEventListener('click', openShop);
     closeShopBtn.addEventListener('click', hideShop);
@@ -1549,7 +1689,7 @@ function setupEventListeners() {
         if (musicEnabled) {
             musicOn.classList.remove('hidden');
             musicOff.classList.add('hidden');
-            if (gameStarted && !isPaused) {
+            if (!isPaused) {
                 resumeMusic();
             }
         } else {
@@ -1579,11 +1719,12 @@ function setupEventListeners() {
     document.addEventListener('touchmove', handleTouchMove, { passive: false });
     document.addEventListener('touchend', handleTouchEnd);
 
-    // Track user interaction for audio
+    // Track user interaction for audio - start music on first interaction
     document.addEventListener('click', () => {
         if (!userInteracted) {
             userInteracted = true;
             initAudio();
+            startMusic();
         }
     }, { once: false });
 
@@ -1591,6 +1732,7 @@ function setupEventListeners() {
         if (!userInteracted) {
             userInteracted = true;
             initAudio();
+            startMusic();
         }
     }, { once: false });
 }
@@ -1821,14 +1963,21 @@ function showGhost(piece, x, y) {
     const rows = piece.shape.length;
     const cols = piece.shape[0].length;
 
+    // Calculate cell size from actual board dimensions
+    const boardRect = boardEl.getBoundingClientRect();
+    const cellSize = Math.floor(boardRect.width / BOARD_SIZE);
+    const gap = 4;
+
     ghostPreview.innerHTML = '';
-    ghostPreview.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-    ghostPreview.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+    ghostPreview.style.gridTemplateColumns = `repeat(${cols}, ${cellSize}px)`;
+    ghostPreview.style.gridTemplateRows = `repeat(${rows}, ${cellSize}px)`;
 
     for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
             const cell = document.createElement('div');
             cell.className = 'ghost-cell';
+            cell.style.width = `${cellSize}px`;
+            cell.style.height = `${cellSize}px`;
 
             if (piece.shape[r][c] === 1) {
                 cell.classList.add(`color-${piece.color}`);
@@ -1840,8 +1989,8 @@ function showGhost(piece, x, y) {
         }
     }
 
-    const ghostWidth = cols * 52;
-    const ghostHeight = rows * 52;
+    const ghostWidth = cols * (cellSize + gap);
+    const ghostHeight = rows * (cellSize + gap);
     ghostPreview.style.left = `${x - ghostWidth / 2}px`;
     ghostPreview.style.top = `${y - ghostHeight / 2}px`;
     ghostPreview.classList.remove('hidden');
@@ -1856,5 +2005,6 @@ function hideGhost() {
 document.addEventListener('DOMContentLoaded', () => {
     loadSoundPreference();
     loadMusicPreferences();
+    loadMusicTracks();
     setupEventListeners();
 });
