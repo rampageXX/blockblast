@@ -593,9 +593,15 @@ async function saveGlobalLeaderboard(leaderboardData) {
 }
 
 function mergeLeaderboards(local, global) {
-    const merged = { ...global };
+    const merged = {};
+    // Only merge entries with numeric scores (filter out corrupted data)
+    for (const [name, score] of Object.entries(global)) {
+        if (typeof score === 'number') {
+            merged[name] = score;
+        }
+    }
     for (const [name, score] of Object.entries(local)) {
-        if (!merged[name] || merged[name] < score) {
+        if (typeof score === 'number' && (!merged[name] || merged[name] < score)) {
             merged[name] = score;
         }
     }
